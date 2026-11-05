@@ -8,7 +8,14 @@ PG=${1:?postgres major}
 IMAGE=${2:-pg-backup:test-$PG}
 NET=pgb-test-$PG-$$
 DIR=$(mktemp -d)
-trap 'docker rm -f "$NET-db" "$NET-restore" "$NET-sched" >/dev/null 2>&1 || true; docker network rm "$NET" >/dev/null 2>&1 || true; rm -rf "$DIR"' EXIT
+# dumps are root-owned with mode 600, as in production: read and clean them up from a container
+in_dir() { docker run --rm -v "$DIR:/backups" --entrypoint sh "$IMAGE" -c "$1"; }
+cleanup() {
+  docker rm -f "$NET-db" "$NET-restore" "$NET-sched" >/dev/null 2>&1 || true
+  docker network rm "$NET" >/dev/null 2>&1 || true
+  in_dir 'rm -rf /backups/*' 2>/dev/null || true; rmdir "$DIR" 2>/dev/null || true
+}
+trap cleanup EXIT
 fail() { echo "FAIL: $*" >&2; exit 1; }
 
 [ "$IMAGE" != "pg-backup:test-$PG" ] || docker build -q -f "$PG/Dockerfile" -t "$IMAGE" . >/dev/null
@@ -24,26 +31,23 @@ psql_in "$NET-db" -c "create table t(id int primary key, v text); insert into t 
 want=$(psql_in "$NET-db" -c "select count(*)||':'||md5(string_agg(v, ',' order by id)) from t")
 
 backup --entrypoint /backup.sh "$IMAGE" | grep -q "SQL backup created successfully" || fail "backup run"
-last=$(find "$DIR/last" -type f -name 'app-*.sql.gz' | head -1)
-[ -n "$last" ] || fail "no dump in last/"
-for d in daily weekly monthly; do
-  f=$(find "$DIR/$d" -type f -name 'app-*.sql.gz' | head -1)
-  [ -n "$f" ] && [ "$f" -ef "$last" ] || fail "$d is not a hard link of the dump"
-  [ -L "$DIR/$d/app-latest.sql.gz" ] && [ -e "$DIR/$d/app-latest.sql.gz" ] || fail "$d/app-latest symlink"
-done
-[ -L "$DIR/last/app-latest.sql.gz" ] || fail "last/app-latest symlink"
-[ -z "$(find "$DIR" -name '*.tmp')" ] || fail "temp file left behind"
+in_dir 'set -e; last=$(find /backups/last -type f -name "app-*.sql.gz" | head -1); [ -n "$last" ]
+  [ "$(stat -c %a "$last")" = 600 ]
+  for d in daily weekly monthly; do f=$(find /backups/$d -type f -name "app-*.sql.gz" | head -1)
+    [ -n "$f" ] && [ "$f" -ef "$last" ] && [ -L /backups/$d/app-latest.sql.gz ] && [ -e /backups/$d/app-latest.sql.gz ]; done
+  [ -L /backups/last/app-latest.sql.gz ] && [ -z "$(find /backups -name "*.tmp")" ]' || fail "file layout"
 
 db "$NET-restore"
-gunzip -c "$last" | psql_in "$NET-restore" >/dev/null
+in_dir 'gunzip -c /backups/last/app-latest.sql.gz' | psql_in "$NET-restore" >/dev/null
 got=$(psql_in "$NET-restore" -c "select count(*)||':'||md5(string_agg(v, ',' order by id)) from t")
 [ "$got" = "$want" ] || fail "restored data differs ($got vs $want)"
 
 # failure path: wrong password -> non-zero exit, no new file, no temp file
-before=$(find "$DIR/last" -type f | wc -l)
+count() { in_dir 'find /backups/last -type f -name "*.sql.gz" | wc -l'; }
+before=$(count)
 if PW=wrong backup --entrypoint /backup.sh "$IMAGE" >/dev/null 2>&1; then fail "backup with a wrong password succeeded"; fi
-[ "$(find "$DIR/last" -type f -name '*.sql.gz' | wc -l)" = "$before" ] || fail "failed run left a dump"
-find "$DIR" -name '*.tmp' -delete
+[ "$(count)" = "$before" ] || fail "failed run left a dump"
+[ -z "$(in_dir 'find /backups -name "*.tmp"')" ] || fail "failed run left a temp file"
 
 # scheduler + healthcheck: BACKUP_ON_START runs once, state ok, container healthy
 backup -d --name "$NET-sched" -e BACKUP_ON_START=TRUE -e BACKUP_TIME=03:30 "$IMAGE" >/dev/null

@@ -17,6 +17,9 @@ export PGHOST=$POSTGRES_HOST PGPORT=${POSTGRES_PORT:-5432} PGUSER=$POSTGRES_USER
 if [ -n "${POSTGRES_PASSWORD_FILE:-}" ]; then PGPASSWORD=$(cat "$POSTGRES_PASSWORD_FILE"); else PGPASSWORD=${POSTGRES_PASSWORD:?}; fi
 export PGPASSWORD
 
+tmp=""
+trap '[ -z "$tmp" ] || rm -f "$tmp"' EXIT
+
 mkdir -p "$BACKUP_DIR/last" "$BACKUP_DIR/daily" "$BACKUP_DIR/weekly" "$BACKUP_DIR/monthly"
 umask 077
 
@@ -25,9 +28,11 @@ for db in $(echo "$DBS" | tr ',' ' '); do
   file=$BACKUP_DIR/last/$name
   echo "Creating dump of $db database from $PGHOST..."
   # temp file + integrity check + rename: an interrupted or failed dump never replaces a good one
-  pg_dump -d "$db" --no-password | gzip -1 > "$file.tmp"
-  gzip -t "$file.tmp"
-  mv "$file.tmp" "$file"
+  tmp=$file.tmp
+  pg_dump -d "$db" --no-password | gzip -1 > "$tmp"
+  gzip -t "$tmp"
+  mv "$tmp" "$file"
+  tmp=""
 
   for period in daily:%Y%m%d weekly:%G%V monthly:%Y%m; do
     dir=${period%%:*}
