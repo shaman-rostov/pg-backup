@@ -1,0 +1,14 @@
+version: 2
+updates:
+  - package-ecosystem: docker
+    directories: ["/15", "/16", "/18"]
+    schedule:
+      interval: weekly
+    ignore:
+      # a new PostgreSQL major is a deliberate change of the directory, not a digest bump
+      - dependency-name: postgres
+        update-types: ["version-update:semver-major"]
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
