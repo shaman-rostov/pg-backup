@@ -1,0 +1,27 @@
+name: Registry cleanup
+
+# Weekly GHCR cleanup of this repository's packages: keeps the 20 newest tagged images (releases to roll back to) with
+# their platform manifests, and deletes untagged versions nothing references. It only reports (dry run) until the
+# repository variable GHCR_CLEANUP_LIVE is "true".
+on:
+  schedule:
+    - cron: "23 5 * * 0"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      packages: write
+    steps:
+      - uses: dataaxiom/ghcr-cleanup-action@d52806a0dc70b430571a37da1fde39733ffd640f # v1.2.2
+        with:
+          packages: pg-backup
+          keep-n-tagged: 20
+          delete-untagged: true
+          validate: true
+          dry-run: ${{ vars.GHCR_CLEANUP_LIVE != 'true' }}
