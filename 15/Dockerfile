@@ -1,5 +1,5 @@
 # PostgreSQL 15 client: pg_dump must be at least the server's major version.
-FROM postgres:15-alpine@sha256:54e0dd8e8cddcdbb9156c2486eed5a43eccb7214d7c6828097d41ce049fb3984
+FROM postgres:15-alpine@sha256:e18480a22d6e48f4d816a6696769b1ec09ac73a824c5649e49c7d8b684913f3d
 # security: the distribution's fixed packages at build time (the weekly rebuild picks up new ones)
 # gosu (the server entrypoint's privilege drop, built with Go 1.24.6) is unused: the backup runs its own entrypoint
 RUN apk upgrade --no-cache && rm -f /usr/local/bin/gosu
